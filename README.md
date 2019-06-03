@@ -4,7 +4,7 @@ This project implement the serving code for [project](https://github.com/michalf
 
 ## download trained model
 
-The trained mode is adopted from michalfaber's project mentioned above. It can be downloaded [here]().
+The trained mode is adopted from michalfaber's project mentioned above. It can be downloaded [here](https://drive.google.com/drive/folders/1-nA-jjOBacyGxU7lPB7hYnNU_fepQLnY?usp=sharing).
 
 ## convert the model from hdf5 to saved model
 
