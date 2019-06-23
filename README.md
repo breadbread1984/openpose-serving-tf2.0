@@ -2,6 +2,19 @@
 
 This project implement the serving code for [project](https://github.com/michalfaber/keras_Realtime_Multi-Person_Pose_Estimation)
 
+## prerequisite tools
+
+install prerequisite tools with the following cmds
+
+```bash
+echo "deb [arch=amd64] http://storage.googleapis.com/tensorflow-serving-apt stable tensorflow-model-server tensorflow-model-server-universal" | sudo tee /etc/apt/sources.list.d/tensorflow-serving.list && \
+	curl https://storage.googleapis.com/tensorflow-serving-apt/tensorflow-serving.release.pub.gpg | sudo apt-key add -
+
+sudo apt update
+sudo apt install python3-opencv tensorflow-model-server
+pip3 install numpy tf-nightly-2.0-preview requests
+```
+
 ## download trained model
 
 The trained mode is adopted from michalfaber's project mentioned above. It can be downloaded [here](https://drive.google.com/drive/folders/1-nA-jjOBacyGxU7lPB7hYnNU_fepQLnY?usp=sharing).
