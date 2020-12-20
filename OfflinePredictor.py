@@ -203,23 +203,20 @@ class Predictor(object):
 
   def sketch(self, canvas, all_peaks, candidate, subset):
 
+    # all_peaks.shape = (18, obj_num, 2): all detected keypoints
+    # subset.shape = (obj_num, 2): index of point
     for i in range(18):
       for j in range(len(all_peaks[i])):
         cv2.circle(canvas, all_peaks[i][j][0:2], 4, self.colors[i], thickness=-1)
 
-    stickwidth = 4
-
     for i in range(17):
-      # for every limb (pair of specific key points)
       for n in range(len(subset)):
-        index = subset[n][np.array(self.limbSeq[i]) - 1] # index.shape = (2)
-        if -1 in index:
-          continue
-        Y = tuple(candidate[index.astype(int), 0].astype('int32')) # Y.shape = (2)
-        X = tuple(candidate[index.astype(int), 1].astype('int32')) # X.shape = (2)
-        cv2.circle(canvas, Y, 4, self.colors[i], thickness = -1);
-        cv2.circle(canvas, X, 4, self.colors[i], thickness = -1);
+        index = subset[n][np.array(self.limbSeq[i]) - 1]; # index.shape = (2)
+        if -1 in index: continue;
+        X = all_peaks[index.astype(int)[0]][n][0:2];
+        Y = all_peaks[index.astype(int)[1]][n][0:2];
         cv2.line(canvas, Y, X, self.colors[i], thickness = 1);
+
     return canvas;
 
   def visualize(self, canvas, all_peaks, candidate, subset):
@@ -227,7 +224,7 @@ class Predictor(object):
     for i in range(18):
       for j in range(len(all_peaks[i])):
         cv2.circle(canvas, all_peaks[i][j][0:2], 4, self.colors[i], thickness=-1)
-
+        
     stickwidth = 4
 
     for i in range(17):
