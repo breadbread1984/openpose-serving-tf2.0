@@ -17,7 +17,7 @@ pip3 install numpy tf-nightly-2.0-preview requests
 
 ## download trained model
 
-The trained mode is adopted from michalfaber's project mentioned above. It can be downloaded [here](https://drive.google.com/drive/folders/1-nA-jjOBacyGxU7lPB7hYnNU_fepQLnY?usp=sharing).
+The trained mode is adopted from michalfaber's project mentioned above. It can be downloaded [here](https://pan.baidu.com/s/1p7jsvN83yZIXCv5egRWFjw), passcode is *88t6*.
 
 ## convert the model from hdf5 to saved model
 
