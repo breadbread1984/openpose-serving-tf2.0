@@ -5,278 +5,190 @@ import numpy as np;
 import cv2;
 import tensorflow as tf;
 
-class Predictor(object):
-
-  def __init__(self):
-
-    # number of distinct limb is 19.
-    # list of heatmap id pair. each pair of distinct keypoints define a distinct limb.
-    # libSeq.shape = (19,2)
-    self.limbSeq = [[2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10], \
-        [10, 11], [2, 12], [12, 13], [13, 14], [2, 1], [1, 15], [15, 17], \
-        [1, 16], [16, 18], [3, 17], [6, 18]];
-    # list of paf channel id pair. each pair of paf channel define a vector field (one for x one for y) of a distinct limb.
-    # mapIdx.shape = (19,2)
-    self.mapIdx = [[31, 32], [39, 40], [33, 34], [35, 36], [41, 42], [43, 44], [19, 20], [21, 22], \
-        [23, 24], [25, 26], [27, 28], [29, 30], [47, 48], [49, 50], [53, 54], [51, 52], \
-        [55, 56], [37, 38], [45, 46]];
-    # visualize
-    self.colors = [[255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0],
-        [0, 255, 0], \
-        [0, 255, 85], [0, 255, 170], [0, 255, 255], [0, 170, 255], [0, 85, 255], [0, 0, 255],
-        [85, 0, 255], \
-        [170, 0, 255], [255, 0, 255], [255, 0, 170], [255, 0, 85]];
-    # load model
-    self.model = tf.keras.models.load_model('savedmodel');
-
-  def predict(self, oriImg):
-
-    multiplier = [x * 368 / oriImg.shape[0] for x in [0.5, 1, 1.5, 2]]
-
-    heatmap_avg = np.zeros((oriImg.shape[0], oriImg.shape[1], 19))
-    paf_avg = np.zeros((oriImg.shape[0], oriImg.shape[1], 38))
-
-    for m in range(len(multiplier)):
-      scale = multiplier[m]
-
-      imageToTest = cv2.resize(oriImg, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-      imageToTest_padded, pad = self.padRightDownCorner(imageToTest, 8, 128)
-
-      input_img = np.transpose(np.float32(imageToTest_padded[:,:,:,np.newaxis]), (3,0,1,2)) # required shape (1, width, height, channels)
-
-      # predict with openpose network
-      output_blobs = self.model.signatures['serving_default'](tf.cast(input_img, dtype = tf.float32));
-      output_blobs = (output_blobs['Mconv7_stage6_L1'], output_blobs['Mconv7_stage6_L2']);
-      # extract outputs, resize, and remove padding
-      heatmap = np.squeeze(output_blobs[1])  # output 1 is heatmaps
-      heatmap = cv2.resize(heatmap, (0, 0), fx=8, fy=8, interpolation=cv2.INTER_CUBIC)
-      heatmap = heatmap[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
-      heatmap = cv2.resize(heatmap, (oriImg.shape[1], oriImg.shape[0]), interpolation=cv2.INTER_CUBIC)
-
-      paf = np.squeeze(output_blobs[0])  # output 0 is PAFs
-      paf = cv2.resize(paf, (0, 0), fx=8, fy=8, interpolation=cv2.INTER_CUBIC)
-      paf = paf[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
-      paf = cv2.resize(paf, (oriImg.shape[1], oriImg.shape[0]), interpolation=cv2.INTER_CUBIC)
-
-      heatmap_avg = heatmap_avg + heatmap / len(multiplier)
-      paf_avg = paf_avg + paf / len(multiplier)
-
-    all_peaks = []
-    peak_counter = 0
-
+class OpenPose(object):
+  # number of distinct limb is 19.
+  # list of heatmap id pair. each pair of distinct keypoints define a distinct limb.
+  # libSeq.shape = (19,2)
+  limbSeq = [[2, 3],   [2, 6],   [3, 4],   [4, 5],   [6, 7], [7, 8],  [2, 9],   [9, 10], \
+             [10, 11], [2, 12],  [12, 13], [13, 14], [2, 1], [1, 15], [15, 17], [1, 16], \
+             [16, 18], [3, 17],  [6, 18]]
+  # list of paf channel id pair. each pair of paf channel define a vector field (one for x one for y) of a distinct limb.
+  # mapIdx.shape = (19,2)
+  mapIdx = [[31, 32], [39, 40], [33, 34], [35, 36], [41, 42], [43, 44], [19, 20], [21, 22], \
+            [23, 24], [25, 26], [27, 28], [29, 30], [47, 48], [49, 50], [53, 54], [51, 52], \
+            [55, 56], [37, 38], [45, 46]]
+  # visualize
+  colors = [[255, 0, 0],   [255, 85, 0],  [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0], [0, 255, 0], \
+            [0, 255, 85],  [0, 255, 170], [0, 255, 255], [0, 170, 255], [0, 85, 255],  [0, 0, 255],  [85, 0, 255], \
+            [170, 0, 255], [255, 0, 255], [255, 0, 170], [255, 0, 85]]
+  def __init__(self, model):
+    self.model = tf.keras.models.load_model(model);
+  def preprocess(self, img):
+    processed = list()
+    scales = [x * 368 / img.shape[0] for x in [0.5, 1, 1.5, 2]]
+    for scale in scales:
+      resized = cv2.resize(img, dsize = None, fx = scale, fy = scale, interpolation = cv2.INTER_CUBIC)
+      h, w, _ = resized.shape
+      # pad to make the image shape divisible by stride(8)
+      pad = [[0, 0 if h % 8 == 0 else 8 - (h % 8)], [0, 0 if w % 8 == 0 else 8 - (w % 8)], [0, 0]]
+      padded = np.pad(resized, pad, mode = 'constant', constant_values = 128)
+      data = np.expand_dims(padded, axis = 0).astype(np.float32) # data.shape = (b,c,h,w)
+      processed.append((data, pad))
+    return processed
+  def predict(self, img):
+    processed = self.preprocess(img)
+    # 1) get heatmaps and pafs of different scales
+    heatmaps = list()
+    pafs = list()
+    for inputs, pad in processed:
+      paf, heatmap = self.model.signatures['serving_default'](inputs);
+      heatmap = np.squeeze(heatmap, axis = 0)
+      heatmap = cv2.resize(heatmap, dsize = None, fx = 8, fy = 8, interpolation = cv2.INTER_CUBIC)
+      heatmap = heatmap[pad[0][0]:heatmap.shape[0] - pad[0][1],pad[1][0]:heatmap.shape[1] - pad[1][1],:]
+      heatmap = cv2.resize(heatmap, dsize = (img.shape[1], img.shape[0]), interpolation = cv2.INTER_CUBIC)
+      heatmaps.append(heatmap)
+      paf = np.squeeze(paf, axis = 0)
+      paf = cv2.resize(paf, dsize = None, fx = 8, fy = 8, interpolation = cv2.INTER_CUBIC)
+      paf = paf[pad[0][0]:paf.shape[0] - pad[0][1],pad[1][0]:paf.shape[1] - pad[1][1],:]
+      paf = cv2.resize(paf, dsize = (img.shape[1], img.shape[0]), interpolation = cv2.INTER_CUBIC)
+      pafs.append(paf)
+    heatmap_avg = np.mean(np.stack(heatmaps), axis = 0)
+    paf_avg = np.mean(np.stack(pafs), axis = 0)
+    # 2) find heatmap peak coordinates and corresponding scores of 18 keypoints
+    all_peaks = list()
     for part in range(18):
-      map_ori = heatmap_avg[:, :, part]
-      map = cv2.GaussianBlur(map_ori, (0,0), sigmaX = 3, sigmaY = 3);
-      #map = gaussian_filter(map_ori, sigma=3)
-
-      map_left = np.zeros(map.shape)
-      map_left[1:, :] = map[:-1, :]
-      map_right = np.zeros(map.shape)
-      map_right[:-1, :] = map[1:, :]
-      map_up = np.zeros(map.shape)
-      map_up[:, 1:] = map[:, :-1]
-      map_down = np.zeros(map.shape)
-      map_down[:, :-1] = map[:, 1:]
-
-      peaks_binary = np.logical_and.reduce(
-        (map >= map_left, map >= map_right, map >= map_up, map >= map_down, map > 0.1))
-      peaks = list(zip(np.nonzero(peaks_binary)[1], np.nonzero(peaks_binary)[0]))  # note reverse
-      peaks_with_score = [x + (map_ori[x[1], x[0]],) for x in peaks]
-      id = range(peak_counter, peak_counter + len(peaks))
-      peaks_with_score_and_id = [peaks_with_score[i] + (id[i],) for i in range(len(id))]
-
-      all_peaks.append(peaks_with_score_and_id)
-      peak_counter += len(peaks)
-
-    connection_all = []
-    special_k = []
-    mid_num = 10
-
+      heatmap = heatmap_avg[...,part]
+      heatmap = cv2.GaussianBlur(heatmap, ksize = None, sigmaX = 3, sigmaY = 3)
+      up = np.roll(heatmap, shift = 1, axis = 0)
+      down = np.roll(heatmap, shift = -1, axis = 0)
+      left = np.roll(heatmap, shift = 1, axis = 1)
+      right = np.roll(heatmap, shift = -1, axis = 1)
+      peaks = np.logical_and.reduce([heatmap >= up, heatmap >= down, heatmap >= left, heatmap >= right, heatmap > 0.1], axis = 0)
+      y,x = np.where(peaks);
+      all_peaks.append([(n,m,heatmap[n,m],i) for i,(n,m) in enumerate(zip(y,x))]) # (y,x,score,index in this keypoint set)
+    # 3) find candidate limbs of every kind, and score them
+    connection_all = list()
     for k in range(len(self.mapIdx)):
-      score_mid = paf_avg[:, :, [x - 19 for x in self.mapIdx[k]]]
-      candA = all_peaks[self.limbSeq[k][0] - 1]
-      candB = all_peaks[self.limbSeq[k][1] - 1]
-      nA = len(candA)
-      nB = len(candB)
-      indexA, indexB = self.limbSeq[k]
-      if (nA != 0 and nB != 0):
-        connection_candidate = []
-        for i in range(nA):
-          for j in range(nB):
-            vec = np.subtract(candB[j][:2], candA[i][:2])
-            norm = math.sqrt(vec[0] * vec[0] + vec[1] * vec[1])
-            # failure case when 2 body parts overlaps
-            if norm == 0:
-              continue
-            vec = np.divide(vec, norm)
-
-            startend = list(zip(np.linspace(candA[i][0], candB[j][0], num=mid_num), \
-                  np.linspace(candA[i][1], candB[j][1], num=mid_num)))
-
-            vec_x = np.array(
-              [score_mid[int(round(startend[I][1])), int(round(startend[I][0])), 0] \
-              for I in range(len(startend))])
-            vec_y = np.array(
-              [score_mid[int(round(startend[I][1])), int(round(startend[I][0])), 1] \
-              for I in range(len(startend))])
-
-            score_midpts = np.multiply(vec_x, vec[0]) + np.multiply(vec_y, vec[1])
-            score_with_dist_prior = sum(score_midpts) / len(score_midpts) + min(
-              0.5 * oriImg.shape[0] / norm - 1, 0)
-            criterion1 = len(np.nonzero(score_midpts > 0.05)[0]) > 0.8 * len(
-              score_midpts)
+      score_mid = paf_avg[...,[x - 19 for x in self.mapIdx[k]]]
+      # get the 2 candidate keypoint sets that can serve as the 2 ends of this limb
+      candA = all_peaks[self.limbSeq[k][0] - 1] # candidate keypointA set
+      candB = all_peaks[self.limbSeq[k][1] - 1] # candidate keypointB set
+      if len(candA) and len(candB):
+        connection_candidate = list()
+        for i, A in enumerate(candA):
+          for j, B in enumerate(candB):
+            Apos = A[:2]; Bpos = B[:2]
+            dist = np.linalg.norm(np.array(Bpos) - np.array(Apos),2)
+            # skip cases in which two keypoints overlap
+            if dist == 0: continue
+            # sample paf over the line between these two keypoints
+            samples_y = np.linspace(A[0], B[0], num = 10)
+            samples_x = np.linspace(A[1], B[1], num = 10)
+            vec_x = score_mid[np.round(samples_y).astype(np.int32), np.round(samples_x).astype(np.int32), 0] # vec_x.shape = (10,)
+            vec_y = score_mid[np.round(samples_y).astype(np.int32), np.round(samples_x).astype(np.int32), 1] # vec_y.shape = (10,)
+            weights = (np.array(Bpos) - np.array(Apos)) / np.maximum(dist, 1e-6)
+            score_midpts = vec_x * weights[1] + vec_y * weights[0] # score_midpts.shape = (10,)
+            score_with_dist_prior = np.sum(score_midpts) / score_midpts.shape[0] + np.minimum(0.5 * img.shape[0] / dist - 1, 0)
+            criterion1 = np.sum((score_midpts > 0.05).astype(np.int32)) > 0.8 * score_midpts.shape[0]
             criterion2 = score_with_dist_prior > 0
             if criterion1 and criterion2:
-              connection_candidate.append([i, j, score_with_dist_prior,
-                            score_with_dist_prior + candA[i][2] + candB[j][2]])
-
-        connection_candidate = sorted(connection_candidate, key=lambda x: x[2], reverse=True)
-        connection = np.zeros((0, 5))
-        for c in range(len(connection_candidate)):
-          i, j, s = connection_candidate[c][0:3]
-          if (i not in connection[:, 3] and j not in connection[:, 4]):
-            connection = np.vstack([connection, [candA[i][3], candB[j][3], s, i, j]])
-            if (len(connection) >= min(nA, nB)):
-              break
-
+              # save candidate limb which meets 2 criterions
+              connection_candidate.append((i, j, score_with_dist_prior, score_with_dist_prior + A[2] + B[2]))
+        # nms
+        connection_candidate = sorted(connection_candidate, key = lambda x: x[2], reverse = True)
+        connection, I, J = list(), set(), set()
+        for candidate in connection_candidate:
+          i,j,s = candidate[:3]
+          if i not in I and j not in J:
+            # any keypoint cannot be shared between two limb of a same kind
+            connection.append([candA[i][3], candB[j][3], s]) # (index of keypointA in the heatmap it belongs, index of keypointB in the heat map it belongs, score)
+            I.add(i); J.add(j)
+            if len(connection) >= min(len(candA), len(candB)): break
+        connection = np.stack(connection) if len(connection) else np.zeros((0, 3)) # connection.shape = (limb_candidate_num, 3)
         connection_all.append(connection)
       else:
-        special_k.append(k)
-        connection_all.append([])
-
-    # last number in each row is the total parts number of that person
-    # the second last number in each row is the score of the overall configuration
-    subset = -1 * np.ones((0, 20))
-    candidate = np.array([item for sublist in all_peaks for item in sublist])
-
+        # cannot find any candidate of this limb, because one of the end keypoint is missing
+        connection_all.append(None)
+    # 4) generate skeleton from limbs
+    skeletons = list() # skeleton[heatmap idx]->keypoint idx
     for k in range(len(self.mapIdx)):
-      if k not in special_k:
-        partAs = connection_all[k][:, 0]
-        partBs = connection_all[k][:, 1]
-        indexA, indexB = np.array(self.limbSeq[k]) - 1
-
-        for i in range(len(connection_all[k])):  # = 1:size(temp,1)
-          found = 0
-          subset_idx = [-1, -1]
-          for j in range(len(subset)):  # 1:size(subset,1):
-            if subset[j][indexA] == partAs[i] or subset[j][indexB] == partBs[i]:
-              subset_idx[found] = j
-              found += 1
-
-          if found == 1:
-            j = subset_idx[0]
-            if (subset[j][indexB] != partBs[i]):
-              subset[j][indexB] = partBs[i]
-              subset[j][-1] += 1
-              subset[j][-2] += candidate[partBs[i].astype(int), 2] + connection_all[k][i][2]
-          elif found == 2:  # if found 2 and disjoint, merge them
-            j1, j2 = subset_idx
-            membership = ((subset[j1] >= 0).astype(int) + (subset[j2] >= 0).astype(int))[:-2]
-            if len(np.nonzero(membership == 2)[0]) == 0:  # merge
-              subset[j1][:-2] += (subset[j2][:-2] + 1)
-              subset[j1][-2:] += subset[j2][-2:]
-              subset[j1][-2] += connection_all[k][i][2]
-              subset = np.delete(subset, j2, 0)
-            else:  # as like found == 1
-              subset[j1][indexB] = partBs[i]
-              subset[j1][-1] += 1
-              subset[j1][-2] += candidate[partBs[i].astype(int), 2] + connection_all[k][i][2]
-
-          # if find no partA in the subset, create a new subset
-          elif not found and k < 17:
-            row = -1 * np.ones(20)
-            row[indexA] = partAs[i]
-            row[indexB] = partBs[i]
-            row[-1] = 2
-            row[-2] = sum(candidate[connection_all[k][i, :2].astype(int), 2]) + \
-                connection_all[k][i][2]
-            subset = np.vstack([subset, row])
-
-    # delete some rows of subset which has few parts occur
-    deleteIdx = [];
-    for i in range(len(subset)):
-      if subset[i][-1] < 4 or subset[i][-2] / subset[i][-1] < 0.4:
-        deleteIdx.append(i)
-    subset = np.delete(subset, deleteIdx, axis=0)
-    
-    return all_peaks, candidate, subset;
-
-  def sketch(self, canvas, all_peaks, candidate, subset):
-
-    # all_peaks.shape = (18, obj_num, 4): all detected keypoints
-    # candidate.shape = (obj_num, 4): 
-    # subset.shape = (obj_num, 20): index of point
-    for i in range(18):
-      for j in range(len(all_peaks[i])):
-        cv2.circle(canvas, all_peaks[i][j][0:2], 4, self.colors[i], thickness=-1)
-
-    for i in range(17):
-      # for every limb (pair of specific key points)
-      for n in range(len(subset)):
-        index = subset[n][np.array(self.limbSeq[i]) - 1] # index.shape = (2)
-        if -1 in index:
-          continue
-        cur_canvas = canvas.copy()
-        X = candidate[index.astype(int), 0].astype(int) # X.shape = (2)
-        Y = candidate[index.astype(int), 1].astype(int) # Y.shape = (2)
-        cv2.line(canvas, (X[0], Y[0]), (X[1], Y[1]), self.colors[i], thickness = 1);
-
-    return canvas;
-
-  def visualize(self, canvas, all_peaks, candidate, subset):
-    
-    for i in range(18):
-      for j in range(len(all_peaks[i])):
-        cv2.circle(canvas, all_peaks[i][j][0:2], 4, self.colors[i], thickness=-1)
-        
-    stickwidth = 4
-
-    for i in range(17):
-      # for every limb (pair of specific key points)
-      for n in range(len(subset)):
-        index = subset[n][np.array(self.limbSeq[i]) - 1] # index.shape = (2)
-        if -1 in index:
-          continue
-        cur_canvas = canvas.copy()
-        Y = candidate[index.astype(int), 0] # Y.shape = (2)
-        X = candidate[index.astype(int), 1] # X.shape = (2)
-        mX = np.mean(X)
-        mY = np.mean(Y)
-        length = ((X[0] - X[1]) ** 2 + (Y[0] - Y[1]) ** 2) ** 0.5
-        angle = math.degrees(math.atan2(X[0] - X[1], Y[0] - Y[1]))
-        polygon = cv2.ellipse2Poly((int(mY), int(mX)), (int(length / 2), stickwidth), int(angle), 0, 360, 1)
-        cv2.fillConvexPoly(cur_canvas, polygon, self.colors[i])
-        canvas = cv2.addWeighted(canvas, 0.4, cur_canvas, 0.6, 0)
-
-    return canvas
-
-  def padRightDownCorner(self, img, stride, padValue):
-    h = img.shape[0]
-    w = img.shape[1]
-
-    pad = 4 * [None]
-    pad[0] = 0 # up
-    pad[1] = 0 # left
-    pad[2] = 0 if (h%stride==0) else stride - (h % stride) # down
-    pad[3] = 0 if (w%stride==0) else stride - (w % stride) # right
-
-    img_padded = img
-    pad_up = np.tile(img_padded[0:1,:,:]*0 + padValue, (pad[0], 1, 1))
-    img_padded = np.concatenate((pad_up, img_padded), axis=0)
-    pad_left = np.tile(img_padded[:,0:1,:]*0 + padValue, (1, pad[1], 1))
-    img_padded = np.concatenate((pad_left, img_padded), axis=1)
-    pad_down = np.tile(img_padded[-2:-1,:,:]*0 + padValue, (pad[2], 1, 1))
-    img_padded = np.concatenate((img_padded, pad_down), axis=0)
-    pad_right = np.tile(img_padded[:,-2:-1,:]*0 + padValue, (1, pad[3], 1))
-    img_padded = np.concatenate((img_padded, pad_right), axis=1)
-
-    return img_padded, pad
+      # for limb of every kind
+      if connection_all[k] is not None:
+        # this limb has candidates
+        indexA, indexB = np.array(self.limbSeq[k]) - 1 # indices of heatmaps which keypointA and keypointB belongs
+        for cand_limb in connection_all[k]:
+          # cand_limb = (index of keypointA in its heatmap, index of keypointB in its heatmap, score)
+          share_end_limbs = [(idx, skeleton) for idx, skeleton in enumerate(skeletons) if (skeleton[indexA] == int(cand_limb[0])) or \
+                                                                                          (skeleton[indexB] == int(cand_limb[1]))]
+          if len(share_end_limbs) == 0 and k < 17:
+            # if this limb has not been used by other skeletons
+            # create a new skeleton and put the limb to this skeleton
+            skeleton = np.array([None for i in range(20)])
+            skeleton[indexA] = int(cand_limb[0])
+            skeleton[indexB] = int(cand_limb[1])
+            skeleton[-1] = 2 # counter of how many keypoints of this skeleton have been found
+            skeleton[-2] = all_peaks[indexA][int(cand_limb[0])][2] + all_peaks[indexB][int(cand_limb[1])][2] + cand_limb[2] # score of the skeleton (total score of keypoints and limbs)
+            skeletons.append(skeleton)
+          elif len(share_end_limbs) == 1:
+            # if one skeleton has a existing limb shares keypoint with this limb
+            # add current limb to this skeleton
+            idx, matched = share_end_limbs[0]
+            if matched[indexB] != int(cand_limb[1]):
+              matched[indexB] = int(cand_limb[1])
+              matched[-1] += 1
+              matched[-2] += all_peaks[indexB][int(cand_limb[1])][2] + cand_limb[2]
+          elif len(share_end_limbs) == 2:
+            # if two skeletons each sharing a distinct keypoint with this limb
+            idx1, matched1 = share_end_limbs[0]; kpset1 = set(np.where(matched1[:-2] != None)[0])
+            idx2, matched2 = share_end_limbs[1]; kpset2 = set(np.where(matched2[:-2] != None)[0])
+            # if the two skeletons own disjoint keypoints, merge the two skeletons together
+            if kpset1.isdisjoint(kpset2):
+              matched1[np.where(matched2[:-2] != None)[0]] = matched2[np.where(matched2[:-2] != None)[0]]
+              matched1[-2:] += matched2[-2:]
+              matched1[-2] += cand_limb[2]
+              skeletons.pop(idx2)
+            # if the two skeletons own common keypoints, add the limb to both of them
+            else:
+              matched1[indexB] = int(cand_limb[1])
+              matched1[-1] += 1
+              matched1[-2] += all_peaks[indexB][int(cand_limb[1])][2] + cand_limb[2]
+    # 5) delete skeletons with only a few limbs
+    skeletons = [skeleton for skeleton in skeletons if skeleton[-1] >= 4 and skeleton[-2] / skeleton[-1] >= 0.4]
+    results = list()
+    for skeleton in skeletons:
+      result = list()
+      for heatmap_idx, keypoint_idx in enumerate(skeleton[:-2]):
+        if keypoint_idx is None: result.append(None)
+        else: result.append(all_peaks[heatmap_idx][keypoint_idx][:2][::-1])
+      results.append((result, skeleton[-2]))
+    return results
+  def visualize(self, img, results):
+    for skeleton, score in results:
+      # visualize joint
+      for heatmap_idx, joint in enumerate(skeleton):
+        if joint is None: continue
+        cv2.circle(img, (joint[0], joint[1]), 4, self.colors[heatmap_idx], thickness = -1)
+      # visualize limb
+      for limb_idx, limb in enumerate(self.limbSeq):
+        if limb_idx >= 17: break
+        if skeleton[limb[0] - 1] is None or skeleton[limb[1] - 1] is None: continue
+        joint1 = skeleton[limb[0] - 1]
+        joint2 = skeleton[limb[1] - 1]
+        meanX = np.mean([joint1[0], joint2[0]])
+        meanY = np.mean([joint1[1], joint2[1]])
+        length = ((joint1[0] - joint2[0]) ** 2 + (joint1[1] - joint2[1]) ** 2) ** .5
+        angle = np.degrees(np.arctan2(joint1[1] - joint2[1], joint1[0] - joint2[0]))
+        polygon = cv2.ellipse2Poly((int(meanX), int(meanY)), (int(length / 2), 4), int(angle), 0, 360, 1)
+        cur_img = img.copy()
+        cv2.fillConvexPoly(cur_img, polygon, self.colors[limb_idx])
+        img = cv2.addWeighted(img, .4, cur_img, .6, 0)
+    return img
 
 if __name__ == "__main__":
   
-  predictor = Predictor();
+  openpose = OpenPose('savedmodel');
   img = cv2.imread('test/square_dance.jpg');
-  all_peaks, candidate, subset = predictor.predict(img);
-  canvas = predictor.sketch(img, all_peaks, candidate, subset);
-  cv2.imshow('pose',canvas);
+  results = openpose.predict(img);
+  img = openpose.visualize(img, results);
+  cv2.imshow('results',img);
   cv2.waitKey();
