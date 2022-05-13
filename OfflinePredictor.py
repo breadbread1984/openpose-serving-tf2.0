@@ -41,7 +41,8 @@ class OpenPose(object):
     heatmaps = list()
     pafs = list()
     for inputs, pad in processed:
-      paf, heatmap = self.model.signatures['serving_default'](inputs);
+      output_blobs = self.model.signatures['serving_default'](tf.constant(inputs));
+      paf, heatmap = output_blobs['Mconv7_stage6_L1'], output_blobs['Mconv7_stage6_L2'];
       heatmap = np.squeeze(heatmap, axis = 0)
       heatmap = cv2.resize(heatmap, dsize = None, fx = 8, fy = 8, interpolation = cv2.INTER_CUBIC)
       heatmap = heatmap[pad[0][0]:heatmap.shape[0] - pad[0][1],pad[1][0]:heatmap.shape[1] - pad[1][1],:]
